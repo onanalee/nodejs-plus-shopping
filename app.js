@@ -1,6 +1,6 @@
 const express = require('express');
 const Http = require('http');
-const socketIo = require('socket.io');
+
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 const { User, Goods, Cart } = require('./models');
@@ -8,141 +8,114 @@ const authMiddleware = require('./middlewares/auth-middleware');
 
 const app = express();
 const http = Http.createServer(app);
-const io = socketIo(http);
+
 const router = express.Router();
 
 const socketIdMap = {};
 
 function emitSamePageViewerCount() {
-    const countByUrl = Object.values(socketIdMap).reduce((value, url) => {
-        return {
-            ...value,
-            [url]: value[url] ? value[url] + 1 : 1,
-        };
-    }, {});
+  const countByUrl = Object.values(socketIdMap).reduce((value, url) => {
+    return {
+      ...value,
+      [url]: value[url] ? value[url] + 1 : 1,
+    };
+  }, {});
 
-    for (const [socketId, url] of Object.entries(socketIdMap)) {
-        const count = countByUrl[url];
-        io.to(socketId).emit('SAME_PAGE_VIEWER_COUNT', count);
-    }
+  for (const [socketId, url] of Object.entries(socketIdMap)) {
+    const count = countByUrl[url];
+    io.to(socketId).emit('SAME_PAGE_VIEWER_COUNT', count);
+  }
 }
 
-io.on('connection', (socket) => {
-    socketIdMap[socket.id] = null;
-    console.log('누군가 연결했어요!');
 
-    socket.on('CHANGED_PAGE', (data) => {
-        console.log('페이지가 바뀌었대요', data, socket.id);
-        socketIdMap[socket.id] = data;
-
-        emitSamePageViewerCount();
-    });
-
-    socket.on('BUY', (data) => {
-        const payload = {
-            nickname: data.nickname,
-            goodsId: data.goodsId,
-            goodsName: data.goodsName,
-            date: new Date().toISOString(),
-        };
-        console.log('클라이언트가 구매한 데이터', data, new Date());
-        socket.broadcast.emit('BUY_GOODS', payload);
-    });
-
-    socket.on('disconnect', () => {
-        delete socketIdMap[socket.id];
-        console.log('누군가 연결을 끊었어요!');
-        emitSamePageViewerCount();
-    });
-});
 
 router.post('/users', async (req, res) => {
-    const { nickname, email, password, confirmPassword } = req.body;
+  const { nickname, email, password, confirmPassword } = req.body;
 
-    if (password !== confirmPassword) {
-        res.status(400).send({
-            errorMessage: '패스워드가 패스워드 확인란과 동일하지 않습니다.',
-        });
-        return;
-    }
-
-    const existUsers = await User.findAll({
-        where: {
-            [Op.or]: [{ nickname }, { email }],
-        },
+  if (password !== confirmPassword) {
+    res.status(400).send({
+      errorMessage: '패스워드가 패스워드 확인란과 동일하지 않습니다.',
     });
-    if (existUsers.length) {
-        res.status(400).send({
-            errorMessage: '이미 가입된 이메일 또는 닉네임이 있습니다.',
-        });
-        return;
-    }
+    return;
+  }
 
-    await User.create({ email, nickname, password });
+  const existUsers = await User.findAll({
+    where: {
+      [Op.or]: [{ nickname }, { email }],
+    },
+  });
+  if (existUsers.length) {
+    res.status(400).send({
+      errorMessage: '이미 가입된 이메일 또는 닉네임이 있습니다.',
+    });
+    return;
+  }
 
-    res.status(201).send({});
+  await User.create({ email, nickname, password });
+
+  res.status(201).send({});
 });
 
 router.post('/auth', async (req, res) => {
-    const { email, password } = req.body;
+  const { email, password } = req.body;
 
-    const user = await User.findOne({ where: { email, password } });
+  const user = await User.findOne({ where: { email, password } });
 
-    if (!user) {
-        res.status(400).send({
-            errorMessage: '이메일 또는 패스워드가 잘못됐습니다.',
-        });
-        return;
-    }
-
-    const token = jwt.sign({ userId: user.userId }, 'my-secret-key');
-    res.send({
-        token,
+  if (!user) {
+    res.status(400).send({
+      errorMessage: '이메일 또는 패스워드가 잘못됐습니다.',
     });
+    return;
+  }
+
+  const token = jwt.sign({ userId: user.userId }, 'my-secret-key');
+  res.send({
+    token,
+  });
 });
 
 router.get('/users/me', authMiddleware, async (req, res) => {
-    const { user } = res.locals;
-    res.send({
-        user,
-    });
+  const { user } = res.locals;
+  res.send({
+    user,
+  });
 });
 
 /**
  * 내가 가진 장바구니 목록을 전부 불러온다.
  */
 router.get('/goods/cart', authMiddleware, async (req, res) => {
-    const { userId } = res.locals.user;
+  const { userId } = res.locals.user;
 
-    const cart = await Cart.findAll({
-        where: {
-            userId,
-        },
-    });
+  const cart = await Cart.findAll({
+    where: {
+      userId,
+    },
+  });
 
-    const goodsIds = cart.map((c) => c.goodsId);
+  const goodsIds = cart.map((c) => c.goodsId);
 
-    // 루프 줄이기 위해 Mapping 가능한 객체로 만든것
-    const goodsKeyById = await Goods.findAll({
-        where: {
-            goodsId: goodsIds,
-        },
-    }).then((goods) =>
-        goods.reduce(
-            (prev, g) => ({
-                ...prev,
-                [g.goodsId]: g,
-            }),
-            {}
-        )
-    );
+  // 루프 줄이기 위해 Mapping 가능한 객체로 만든것
+  const goodsKeyById = await Goods.findAll({
+    where: {
+      goodsId: goodsIds,
+    },
+  }).then((goods) =>
+    goods.reduce(
+      (prev, g) => ({
+        ...prev,
+        [g.goodsId]: g,
+      }),
+      {}
+    )
+  );
 
-    res.send({
-        cart: cart.map((c) => ({
-            quantity: c.quantity,
-            goods: goodsKeyById[c.goodsId],
-        })),
-    });
+  res.send({
+    cart: cart.map((c) => ({
+      quantity: c.quantity,
+      goods: goodsKeyById[c.goodsId],
+    })),
+  });
 });
 
 /**
@@ -150,53 +123,53 @@ router.get('/goods/cart', authMiddleware, async (req, res) => {
  * 장바구니에 상품이 이미 담겨있으면 갯수만 수정한다.
  */
 router.put('/goods/:goodsId/cart', authMiddleware, async (req, res) => {
-    const { userId } = res.locals.user;
-    const { goodsId } = req.params;
-    const { quantity } = req.body;
+  const { userId } = res.locals.user;
+  const { goodsId } = req.params;
+  const { quantity } = req.body;
 
-    const existsCart = await Cart.findOne({
-        where: {
-            userId,
-            goodsId: Number(goodsId),
-        },
+  const existsCart = await Cart.findOne({
+    where: {
+      userId,
+      goodsId: Number(goodsId),
+    },
+  });
+
+  if (existsCart) {
+    existsCart.quantity = quantity;
+    await existsCart.save();
+  } else {
+    await Cart.create({
+      userId,
+      goodsId: Number(goodsId),
+      quantity,
     });
+  }
 
-    if (existsCart) {
-        existsCart.quantity = quantity;
-        await existsCart.save();
-    } else {
-        await Cart.create({
-            userId,
-            goodsId: Number(goodsId),
-            quantity,
-        });
-    }
-
-    // NOTE: 성공했을때 딱히 정해진 응답 값이 없다.
-    res.send({});
+  // NOTE: 성공했을때 딱히 정해진 응답 값이 없다.
+  res.send({});
 });
 
 /**
  * 장바구니 항목 삭제
  */
 router.delete('/goods/:goodsId/cart', authMiddleware, async (req, res) => {
-    const { userId } = res.locals.user;
-    const { goodsId } = req.params;
+  const { userId } = res.locals.user;
+  const { goodsId } = req.params;
 
-    const existsCart = await Cart.findOne({
-        where: {
-            userId,
-            goodsId: Number(goodsId),
-        },
-    });
+  const existsCart = await Cart.findOne({
+    where: {
+      userId,
+      goodsId: Number(goodsId),
+    },
+  });
 
-    // 있든 말든 신경 안쓴다. 그냥 있으면 지운다.
-    if (existsCart) {
-        await existsCart.destroy();
-    }
+  // 있든 말든 신경 안쓴다. 그냥 있으면 지운다.
+  if (existsCart) {
+    await existsCart.destroy();
+  }
 
-    // NOTE: 성공했을때 딱히 정해진 응답 값이 없다.
-    res.send({});
+  // NOTE: 성공했을때 딱히 정해진 응답 값이 없다.
+  res.send({});
 });
 
 /**
@@ -208,32 +181,32 @@ router.delete('/goods/:goodsId/cart', authMiddleware, async (req, res) => {
  * /api/goods?category=drink2
  */
 router.get('/goods', authMiddleware, async (req, res) => {
-    const { category } = req.query;
-    const goods = await Goods.findAll({
-        order: [['goodsId', 'DESC']],
-        where: category ? { category } : undefined,
-    });
+  const { category } = req.query;
+  const goods = await Goods.findAll({
+    order: [['goodsId', 'DESC']],
+    where: category ? { category } : undefined,
+  });
 
-    res.send({ goods });
+  res.send({ goods });
 });
 
 /**
  * 상품 하나만 가져오기
  */
 router.get('/goods/:goodsId', authMiddleware, async (req, res) => {
-    const { goodsId } = req.params;
-    const goods = await Goods.findByPk(goodsId);
+  const { goodsId } = req.params;
+  const goods = await Goods.findByPk(goodsId);
 
-    if (!goods) {
-        res.status(404).send({});
-    } else {
-        res.send({ goods });
-    }
+  if (!goods) {
+    res.status(404).send({});
+  } else {
+    res.send({ goods });
+  }
 });
 
 app.use('/api', express.urlencoded({ extended: false }), router);
 app.use(express.static('assets'));
 
-http.listen(8080, () => {
-    console.log('서버가 요청을 받을 준비가 됐어요');
-});
+
+
+module.exports = http;
